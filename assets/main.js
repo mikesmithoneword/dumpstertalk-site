@@ -13,6 +13,9 @@
   var CACHE_KEY = "dt_apple_eps_v1";
   var CACHE_MS = 60 * 60 * 1000;
   var PAGE_SIZE = 6;
+  // Player styling from the Acast embed builder. Kept here so that swapping to a
+  // single episode looks the same as the feed player in index.html.
+  var EMBED_STYLE = "accentColor=161616&bgColor=ffcc0b&secondaryColor=161616&font-family=Barlow%20Condensed&font-src=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DBarlow%2BCondensed&subscribe=false";
 
   /* ---------- Mobile nav ---------- */
   var header = document.querySelector(".site-header");
@@ -88,7 +91,7 @@
 
   function playEpisode(ep) {
     if (!player || !ep.acast) return;
-    player.src = "https://embed.acast.com/" + SHOW_ID + "/" + ep.acast;
+    player.src = "https://embed.acast.com/" + SHOW_ID + "/" + ep.acast + "?" + EMBED_STYLE;
     player.height = 190;
     if (playerReset) playerReset.hidden = false;
     var target = document.getElementById("listen");
