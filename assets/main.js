@@ -300,6 +300,109 @@
     renderEpisodes();
   });
 
+  /* ---------- Pitch-an-idea form ----------
+     Posts to Web3Forms, which emails the submission to the address the
+     access key belongs to. No key set? Show a plain mailto note instead,
+     so the section is never a dead end. */
+  var pitchForm = document.getElementById("pitch-form");
+  if (pitchForm) {
+    var cfg2 = window.DT_FORM || {};
+    var email = cfg2.fallbackEmail || "info@dumpstertalk.com";
+    var msgEl = document.getElementById("pf-message");
+    var countEl = document.getElementById("pf-count");
+    var statusEl = document.getElementById("pf-status");
+    var submitBtn = document.getElementById("pf-submit");
+    var MAX = 500;
+
+    function mailtoLink(text) {
+      var a = el("a", null, text);
+      a.href = "mailto:" + email;
+      return a;
+    }
+
+    if (!cfg2.accessKey) {
+      var note = el("p", "pitch-note");
+      note.appendChild(document.createTextNode("The idea form isn’t switched on yet. In the meantime, email your idea to "));
+      note.appendChild(mailtoLink(email));
+      note.appendChild(document.createTextNode(" and say which segment it’s for."));
+      pitchForm.parentNode.replaceChild(note, pitchForm);
+    } else {
+      // live character counter
+      function updateCount() {
+        var n = msgEl.value.length;
+        countEl.textContent = n + " / " + MAX;
+        countEl.className = "counter" + (n >= MAX ? " over" : "");
+      }
+      msgEl.addEventListener("input", updateCount);
+      updateCount();
+
+      function setStatus(text, kind) {
+        statusEl.textContent = text || "";
+        statusEl.className = "pitch-status" + (kind ? " " + kind : "");
+      }
+
+      function firstProblem() {
+        var f = pitchForm;
+        if (!f.name.value.trim()) return [f.name, "Add your name so we know who to blame."];
+        if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(f.email.value.trim())) return [f.email, "That email address doesn’t look right."];
+        if (!f.segment.value) return [f.segment, "Pick which segment this is for."];
+        if (!f.message.value.trim()) return [f.message, "Tell us the idea."];
+        return null;
+      }
+
+      pitchForm.addEventListener("submit", function (e) {
+        e.preventDefault();
+        pitchForm.querySelectorAll(".invalid").forEach(function (n) { n.classList.remove("invalid"); });
+
+        var problem = firstProblem();
+        if (problem) {
+          problem[0].classList.add("invalid");
+          problem[0].focus();
+          setStatus(problem[1], "bad");
+          return;
+        }
+
+        var data = {
+          access_key: cfg2.accessKey,
+          subject: "Dumpster Talk idea: " + pitchForm.segment.value,
+          from_name: "Dumpster Talk website",
+          name: pitchForm.name.value.trim(),
+          email: pitchForm.email.value.trim(),
+          segment: pitchForm.segment.value,
+          message: pitchForm.message.value.trim(),
+          botcheck: pitchForm.botcheck.checked ? "true" : ""
+        };
+
+        submitBtn.disabled = true;
+        setStatus("Sending…", null);
+
+        fetch("https://api.web3forms.com/submit", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Accept": "application/json" },
+          body: JSON.stringify(data)
+        })
+          .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); })
+          .then(function (res) {
+            submitBtn.disabled = false;
+            if (res.ok) {
+              pitchForm.reset();
+              updateCount();
+              setStatus("Got it. If it’s any good you might hear it on the show.", "ok");
+            } else {
+              throw new Error((res.body && res.body.message) || "failed");
+            }
+          })
+          .catch(function () {
+            submitBtn.disabled = false;
+            setStatus("", "bad");
+            statusEl.appendChild(document.createTextNode("That didn’t send. Try again, or email it to "));
+            statusEl.appendChild(mailtoLink(email));
+            statusEl.appendChild(document.createTextNode("."));
+          });
+      });
+    }
+  }
+
   /* ---------- Merch store ---------- */
   var storeNode = document.getElementById("merch-store");
   var cfg = window.DT_STORE || {};

@@ -105,8 +105,8 @@
     <!-- TICKER -->
     <div class="ticker" aria-hidden="true">
       <div class="ticker-track">
-        <span>#thiswillneverwork</span><b>&#9733;</b><span>bad ideas</span><b>&#9733;</b><span>worse decisions</span><b>&#9733;</b><span>comageddon</span><b>&#9733;</b><span>date night</span><b>&#9733;</b><span>#terribletake</span><b>&#9733;</b>
-        <span>#thiswillneverwork</span><b>&#9733;</b><span>bad ideas</span><b>&#9733;</b><span>worse decisions</span><b>&#9733;</b><span>comageddon</span><b>&#9733;</b><span>date night</span><b>&#9733;</b><span>#terribletake</span><b>&#9733;</b>
+        <span>#thiswillneverwork</span><b>&#9733;</b><span>bad ideas</span><b>&#9733;</b><span>worse decisions</span><b>&#9733;</b><span>comageddon</span><b>&#9733;</b><span>date night</span><b>&#9733;</b><span>#terribletake</span><b>&#9733;</b><span>i am gwad</span><b>&#9733;</b>
+        <span>#thiswillneverwork</span><b>&#9733;</b><span>bad ideas</span><b>&#9733;</b><span>worse decisions</span><b>&#9733;</b><span>comageddon</span><b>&#9733;</b><span>date night</span><b>&#9733;</b><span>#terribletake</span><b>&#9733;</b><span>i am gwad</span><b>&#9733;</b>
       </div>
     </div>
 
@@ -189,7 +189,57 @@
             <h3>#TerribleTake</h3>
             <p>A hot take with zero research behind it. History, Karl Marx, George Thorogood &mdash; nothing is safe.</p>
           </li>
+          <li class="ticket t4">
+            <h3>Would You Rather</h3>
+            <p class="ticket-aka">a.k.a. &ldquo;I am Gwad&rdquo;</p>
+            <p>No good answers, no way out, and far too much conjecture before the floor is closed.</p>
+          </li>
+          <li class="ticket t5">
+            <h3>Ask Baloney Jones</h3>
+            <p>Want to get Baloney Jones&rsquo; thoughts on something? Send in a question. The answer arrives with total confidence and no research whatsoever.</p>
+          </li>
         </ul>
+
+        <h3 class="sub-title">Pitch us an idea</h3>
+        <p class="form-lede">Got a Would You Rather that would ruin someone&rsquo;s afternoon? A question for Baloney Jones? Send it over &mdash; it lands straight in our inbox.</p>
+
+        <form class="pitch" id="pitch-form" novalidate>
+          <div class="pitch-row">
+            <label class="field">
+              <span class="field-label">Your name</span>
+              <input type="text" name="name" id="pf-name" maxlength="80" autocomplete="name" required>
+            </label>
+            <label class="field">
+              <span class="field-label">Your email</span>
+              <input type="email" name="email" id="pf-email" maxlength="120" autocomplete="email" required>
+            </label>
+          </div>
+
+          <label class="field">
+            <span class="field-label">Which segment</span>
+            <select name="segment" id="pf-segment" required>
+              <option value="">Pick one&hellip;</option>
+              <option>Comageddon</option>
+              <option>Date Night</option>
+              <option>#TerribleTake</option>
+              <option>Would You Rather</option>
+              <option>Ask Baloney Jones</option>
+              <option>Not sure / something else</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span class="field-label">Your idea <span class="counter" id="pf-count">0 / 500</span></span>
+            <textarea name="message" id="pf-message" maxlength="500" rows="5" required></textarea>
+          </label>
+
+          <input type="checkbox" name="botcheck" class="botcheck" tabindex="-1" autocomplete="off" aria-hidden="true">
+
+          <div class="pitch-actions">
+            <button class="btn btn-green" type="submit" id="pf-submit">Send it in</button>
+            <p class="pitch-status" id="pf-status" role="status" aria-live="polite"></p>
+          </div>
+        </form>
 
         <h3 class="sub-title">Who&rsquo;s to blame</h3>
         <div class="hosts">
@@ -276,6 +326,7 @@
 
   <script src="data/episodes.js"></script>
   <script src="assets/store-config.js"></script>
+  <script src="assets/form-config.js"></script>
   <script src="assets/main.js"></script>
 </body>
 </html>
