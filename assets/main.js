@@ -592,6 +592,7 @@
     box.appendChild(cart.listNode);
 
     var foot = el("div", "cart-foot");
+    foot.appendChild(buildCurrencySwitch("cart"));
     cart.totalNode = el("p", "cart-total", "");
     foot.appendChild(cart.totalNode);
     cart.goNode = el("a", "btn btn-yellow cart-go", "Checkout");
@@ -965,8 +966,8 @@
     return li;
   }
 
-  function buildCurrencySwitch() {
-    var wrap = el("div", "cur-switch");
+  function buildCurrencySwitch(where) {
+    var wrap = el("div", "cur-switch" + (where ? " at-" + where : ""));
     wrap.setAttribute("role", "group");
     wrap.setAttribute("aria-label", "Currency");
     wrap.appendChild(el("span", "cur-label", "Prices in"));
@@ -992,7 +993,7 @@
   function renderProducts(list) {
     storeNode.textContent = "";
     tiles = [];
-    storeNode.appendChild(buildCurrencySwitch());
+    storeNode.appendChild(buildCurrencySwitch("top"));
     var grid = el("ul", "prod-grid");
     list.forEach(function (row) { grid.appendChild(buildTile(row.product, row.allowBack)); });
     storeNode.appendChild(grid);
