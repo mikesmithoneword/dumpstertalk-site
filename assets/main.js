@@ -493,19 +493,48 @@
     o.headers.Accept = "application/json";
     if (o.body) o.headers["Content-Type"] = "application/json";
     return fetch(url, o).then(function (r) {
-      if (!r.ok) throw new Error("HTTP " + r.status);
-      return r.json();
+      if (r.ok) return r.json();
+      return r.text().then(function (txt) {
+        var err = new Error("HTTP " + r.status);
+        err.status = r.status;
+        try { err.body = JSON.parse(txt); } catch (e) { err.body = null; }
+        throw err;
+      });
     });
   }
 
   /* --- direct checkout link, used as the fallback if carts misbehave --- */
+  function curParam() {
+    // cfg.checkoutCurrency: "" or null = let Fourthwall choose by location,
+    // which is what lets a Canadian see CAD without backing out first.
+    var c = cfg.checkoutCurrency;
+    return c ? "&currency=" + encodeURIComponent(String(c).toUpperCase()) : "";
+  }
   function directCheckout(variantId) {
-    return "https://" + SHOP + "/cart/checkout?products=" + encodeURIComponent(variantId) +
-           ":1&currency=" + encodeURIComponent(CUR);
+    return "https://" + SHOP + "/cart/checkout?products=" + encodeURIComponent(variantId) + ":1" + curParam();
   }
   function cartCheckout(cartId) {
-    return "https://" + SHOP + "/cart/checkout?cartId=" + encodeURIComponent(cartId) +
-           "&currency=" + encodeURIComponent(CUR);
+    return "https://" + SHOP + "/cart/checkout?cartId=" + encodeURIComponent(cartId) + curParam();
+  }
+
+  // Variants Fourthwall refuses to sell right now. The product listing can
+  // say "unlimited stock" and the cart still answers CART_OFFER_NOT_AVAILABLE,
+  // so the only honest source is a failed add.
+  var deadVariants = {};
+
+  function isItemError(err) {
+    if (!err || !err.status) return false;
+    if (err.body && err.body.code === "CART_OFFER_NOT_AVAILABLE") return true;
+    return err.status === 400 || err.status === 409 || err.status === 422;
+  }
+  function isCartGone(err) {
+    return !!err && (err.status === 404 || err.status === 410);
+  }
+
+  function markDead(variantId, err) {
+    var id = (err && err.body && err.body.variantId) || variantId;
+    if (id) deadVariants[id] = true;
+    tiles.forEach(function (t) { if (t.refresh) t.refresh(); });
   }
 
   /* ---------- the cart ---------- */
@@ -646,26 +675,45 @@
     tiles.forEach(function (t) { t.toDirect(); });
   }
 
+  function addCall(variantId) {
+    var payload = JSON.stringify({ items: [{ variantId: variantId, quantity: 1 }] });
+    return cart.id
+      ? api("/carts/" + encodeURIComponent(cart.id) + "/add", { method: "POST", body: payload })
+      : api("/carts", { method: "POST", body: payload });
+  }
+
   function cartAdd(variantId) {
     cartBusy(true);
-    var req = cart.id
-      ? api("/carts/" + encodeURIComponent(cart.id) + "/add",
-            { method: "POST", body: JSON.stringify({ items: [{ variantId: variantId, quantity: 1 }] }) })
-      : api("/carts", { method: "POST", body: JSON.stringify({ items: [{ variantId: variantId, quantity: 1 }] }) });
-    return req
-      .then(function (c) {
-        cart.id = c.id; cart.data = c; writeCartId(c.id);
-        renderCart(); cartBusy(false);
-      })
-      .catch(function () {
-        cartBusy(false);
-        if (cart.id) {       // stale cart id? start clean and try once more
+    function keep(c) {
+      cart.id = c.id; cart.data = c; writeCartId(c.id);
+      renderCart(); cartBusy(false);
+      return { ok: true };
+    }
+    return addCall(variantId)
+      .then(keep)
+      .catch(function (err) {
+        // One item Fourthwall will not sell. Flag that variant and carry on -
+        // the cart itself is fine.
+        if (isItemError(err)) {
+          cartBusy(false);
+          markDead(variantId, err);
+          return { ok: false, item: true };
+        }
+        // Our stored cart has expired or been cleaned up: start a fresh one.
+        if (cart.id && isCartGone(err)) {
           cart.id = null; writeCartId(null);
           return api("/carts", { method: "POST", body: JSON.stringify({ items: [{ variantId: variantId, quantity: 1 }] }) })
-            .then(function (c) { cart.id = c.id; cart.data = c; writeCartId(c.id); renderCart(); })
-            .catch(cartFailed);
+            .then(keep)
+            .catch(function (err2) {
+              cartBusy(false);
+              if (isItemError(err2)) { markDead(variantId, err2); return { ok: false, item: true }; }
+              cartFailed();
+              return { ok: false };
+            });
         }
+        cartBusy(false);
         cartFailed();
+        return { ok: false };
       });
   }
 
@@ -675,7 +723,11 @@
     api("/carts/" + encodeURIComponent(cart.id) + "/change",
         { method: "POST", body: JSON.stringify({ items: [{ variantId: variantId, quantity: quantity }] }) })
       .then(function (c) { cart.data = c; renderCart(); cartBusy(false); })
-      .catch(function () { cartBusy(false); cartFailed(); });
+      .catch(function (err) {
+        cartBusy(false);
+        if (isItemError(err)) { markDead(variantId, err); return; }
+        cartFailed();
+      });
   }
 
   function cartRemove(variantId, quantity) {
@@ -684,7 +736,11 @@
     api("/carts/" + encodeURIComponent(cart.id) + "/remove",
         { method: "POST", body: JSON.stringify({ items: [{ variantId: variantId, quantity: quantity }] }) })
       .then(function (c) { cart.data = c; renderCart(); cartBusy(false); })
-      .catch(function () { cartBusy(false); cartFailed(); });
+      .catch(function (err) {
+        cartBusy(false);
+        if (isItemError(err)) { markDead(variantId, err); return; }
+        cartFailed();
+      });
   }
 
   function restoreCart() {
@@ -739,6 +795,23 @@
       })[0] || null;
     }
 
+    function variantFor(colour, size) {
+      return variants.filter(function (v) {
+        return (!colour || attr(v, "color") === colour) && (!size || attr(v, "size") === size);
+      })[0] || null;
+    }
+    function labelSize(size) {
+      var v = variantFor(colourSel ? colourSel.value : "", size);
+      if (!v) return size + " \u2014 not made";
+      return deadVariants[v.id] ? size + " \u2014 sold out" : size;
+    }
+    function labelColour(colour) {
+      var any = variants.filter(function (v) {
+        return attr(v, "color") === colour && !deadVariants[v.id];
+      });
+      return any.length ? colour : colour + " \u2014 sold out";
+    }
+
     function setShots(v) {
       var ims = imagesOf(v, product);
       if (ims[0] && front.getAttribute("src") !== ims[0]) front.src = ims[0];
@@ -762,21 +835,36 @@
 
     var unavailable = false;
 
+    function relabel() {
+      if (sizeSel) {
+        Array.prototype.forEach.call(sizeSel.options, function (o) { o.textContent = labelSize(o.value); });
+      }
+      if (colourSel) {
+        Array.prototype.forEach.call(colourSel.options, function (o) { o.textContent = labelColour(o.value); });
+      }
+    }
+
     function refresh() {
+      if (soldOut) return;
       var v = currentVariant();
       setShots(v || first);
-      if (!v) {
+      relabel();
+      var gone = v && deadVariants[v.id];
+      if (!v || gone) {
         unavailable = true;
-        btn.textContent = "Unavailable";
+        btn.textContent = gone ? "Sold out" : "Unavailable";
         btn.disabled = true;
+        btn.className = "btn btn-yellow prod-buy is-off";
         link.removeAttribute("href");
-        link.textContent = "Unavailable";
+        link.textContent = btn.textContent;
         link.className = "btn btn-yellow prod-buy is-off";
+        if (v) priceEl.textContent = money(v.unitPrice);
         return;
       }
       unavailable = false;
       btn.disabled = false;
       btn.textContent = "Add to cart";
+      btn.className = "btn btn-yellow prod-buy";
       priceEl.textContent = money(v.unitPrice);
       link.href = directCheckout(v.id);
       link.textContent = "Buy";
@@ -829,8 +917,9 @@
       if (!v || soldOut) return;
       btn.disabled = true;
       btn.textContent = "Adding…";
-      cartAdd(v.id).then(function () {
+      cartAdd(v.id).then(function (res) {
         if (cart.broken) return;
+        if (res && res.item) { refresh(); return; }   // Fourthwall refused that size
         btn.textContent = "Added ✓";
         setTimeout(function () {
           if (unavailable || soldOut) return;
@@ -851,6 +940,7 @@
             if (val === keep) o.selected = true;
             sizeSel.appendChild(o);
           });
+          if (sizeSel.selectedIndex < 0) sizeSel.selectedIndex = 0;
         }
         refresh();
       });
@@ -860,6 +950,7 @@
     if (!soldOut) { refresh(); } else { setShots(first); }
 
     tiles.push({
+      refresh: function () { if (!soldOut) refresh(); },
       toDirect: function () {         // cart API died: show the plain Buy link
         btn.hidden = true;
         link.hidden = false;

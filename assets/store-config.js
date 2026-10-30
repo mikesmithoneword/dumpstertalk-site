@@ -29,6 +29,12 @@ window.DT_STORE = {
   // rate plus a 2% buffer, so $45 USD shows as roughly $64 CAD.
   currency: "USD",
 
+  // Currency at checkout. Leave this blank and Fourthwall picks it from
+  // the visitor's location - Canadians land straight on CAD, Americans on
+  // USD. Setting it (e.g. "USD") forces everyone into that one currency
+  // and hides the choice, which is what used to trap Canadians.
+  checkoutCurrency: "",
+
   // Collections where hovering a product should NOT flip to the second
   // photo. Hats are photographed from several angles rather than
   // front-and-back, so a hover swap just looks like a glitch.
