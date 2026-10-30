@@ -601,8 +601,8 @@
     foot.appendChild(cart.goNode);
     box.appendChild(foot);
 
-    box.appendChild(el("p", "cart-note",
-      "Checkout opens in a new tab on Fourthwall, in " + CUR + ". Shipping and taxes are worked out there."));
+    cart.noteNode = el("p", "cart-note", cartNoteText());
+    box.appendChild(cart.noteNode);
 
     cart.node = box;
     return box;
@@ -958,6 +958,11 @@
 
     tiles.push({
       refresh: function () { if (!soldOut) refresh(); },
+      setPrices: function (map) {
+        variants.forEach(function (v) { if (map[v.id]) v.unitPrice = map[v.id]; });
+        if (soldOut) { priceEl.textContent = money(first && first.unitPrice); }
+        else { refresh(); }
+      },
       toDirect: function () {         // cart API died: show the plain Buy link
         btn.hidden = true;
         link.hidden = false;
@@ -966,33 +971,82 @@
     return li;
   }
 
+  var curButtons = [];
+  var footMsg = null;
+
   function buildCurrencySwitch(where) {
     var wrap = el("div", "cur-switch" + (where ? " at-" + where : ""));
     wrap.setAttribute("role", "group");
     wrap.setAttribute("aria-label", "Currency");
     wrap.appendChild(el("span", "cur-label", "Prices in"));
     CURRENCIES.forEach(function (code) {
-      var b = el("button", "cur-opt" + (code === CUR ? " is-on" : ""), code);
+      var b = el("button", "cur-opt", code);
       b.type = "button";
-      b.setAttribute("aria-pressed", code === CUR ? "true" : "false");
+      b.dataset.cur = code;
       b.addEventListener("click", function () { switchCurrency(code); });
       wrap.appendChild(b);
+      curButtons.push(b);
     });
+    paintCurrency();
     return wrap;
   }
 
+  function paintCurrency() {
+    curButtons.forEach(function (b) {
+      var on = b.dataset.cur === CUR;
+      b.classList.toggle("is-on", on);
+      b.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+  }
+
+  function footText() {
+    return CUR === "CAD"
+      ? "Prices in Canadian dollars, converted by Fourthwall. Shipping is worked out at checkout. "
+      : "Prices in US dollars. Switch to CAD above if you are in Canada. Shipping is worked out at checkout. ";
+  }
+  function cartNoteText() {
+    return "Checkout opens in a new tab on Fourthwall, in " + CUR + ". Shipping and taxes are worked out there.";
+  }
+
+  // Swap the price tags without rebuilding the section: tearing the DOM down
+  // made the page collapse and jump, which is maddening if you were looking
+  // at your own cart total at the time.
   function switchCurrency(code) {
-    if (code === CUR) return;
+    if (code === CUR || switchCurrency.busy) return;
+    var was = CUR;
+    switchCurrency.busy = true;
     CUR = code;
-    try { localStorage.setItem(CUR_KEY, code); } catch (e) { /* fine */ }
-    storeNode.textContent = "";
-    storeNode.appendChild(el("p", "shop-msg", "Changing the price tags\u2026"));
-    loadStore();
+    paintCurrency();
+    curButtons.forEach(function (b) { b.disabled = true; });
+
+    function done(ok) {
+      switchCurrency.busy = false;
+      curButtons.forEach(function (b) { b.disabled = false; });
+      if (!ok) { CUR = was; paintCurrency(); return; }
+      try { localStorage.setItem(CUR_KEY, CUR); } catch (e) { /* fine */ }
+      if (footMsg) footMsg.firstChild.nodeValue = footText();
+      if (cart.noteNode) cart.noteNode.textContent = cartNoteText();
+    }
+
+    collectProducts()
+      .then(function (list) {
+        var prices = {};
+        list.forEach(function (row) {
+          (row.product.variants || []).forEach(function (v) {
+            if (v && v.id) prices[v.id] = v.unitPrice;
+          });
+        });
+        tiles.forEach(function (t) { if (t.setPrices) t.setPrices(prices); });
+        return cart.id ? restoreCart() : null;
+      })
+      .then(function () { done(true); })
+      .catch(function () { done(false); });
   }
 
   function renderProducts(list) {
     storeNode.textContent = "";
     tiles = [];
+    curButtons = [];
     storeNode.appendChild(buildCurrencySwitch("top"));
     var grid = el("ul", "prod-grid");
     list.forEach(function (row) { grid.appendChild(buildTile(row.product, row.allowBack)); });
@@ -1000,9 +1054,8 @@
     storeNode.appendChild(buildCartPanel());
 
     var msg = el("p", "shop-msg");
-    msg.appendChild(document.createTextNode(CUR === "CAD"
-      ? "Prices in Canadian dollars, converted by Fourthwall. Shipping is worked out at checkout. "
-      : "Prices in US dollars. Switch to CAD above if you are in Canada. Shipping is worked out at checkout. "));
+    footMsg = msg;
+    msg.appendChild(document.createTextNode(footText()));
     var a = el("a", null, "See the whole shop");
     a.href = "https://" + SHOP;
     a.target = "_blank";
@@ -1023,7 +1076,9 @@
   // reachable through collections, and even the built-in "all" collection
   // is one you curate by hand. So we read every collection and merge,
   // which means a product shows up as long as it is in at least one.
-  function loadStore() {
+  // Reads every collection and merges them into one ordered list.
+  // Used both for the first paint and for a currency change.
+  function collectProducts() {
     // shop-front order: shirts first, odds and ends last
     var PREF = ["tees", "t-shirts", "shirts", "hoodies", "sweatshirts", "tanks", "hats", "stickers"];
     function rank(slug) {
@@ -1041,7 +1096,7 @@
           return slugs.length ? slugs : ["all"];
         });
 
-    step
+    return step
       .then(function (slugs) {
         return Promise.all(slugs.map(productsIn)).then(function (lists) {
           return { slugs: slugs, lists: lists };
@@ -1068,6 +1123,13 @@
         list.sort(function (a, b) {
           return (stateOf(a.product) === "SOLD_OUT" ? 1 : 0) - (stateOf(b.product) === "SOLD_OUT" ? 1 : 0);
         });
+        return list;
+      });
+  }
+
+  function loadStore() {
+    collectProducts()
+      .then(function (list) {
         if (!list.length) { renderPlaceholder(); return; }
         renderProducts(list);
         restoreCart();
