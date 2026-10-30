@@ -407,6 +407,10 @@
   var storeNode = document.getElementById("merch-store");
   var cfg = window.DT_STORE || {};
   var API = "https://storefront-api.fourthwall.com/v1";
+  var CUR = (cfg.currency || "USD").toUpperCase();
+  var CART_KEY = "dt_cart_id_v1";
+  var SHOP = String(cfg.shopDomain || "").replace(/^https?:\/\//, "").replace(/\/$/, "");
+  var noBack = (cfg.noBackImage || ["hats"]).map(function (x) { return String(x).toLowerCase(); });
   var placeholderNames = ["T-Shirts", "Hoodies", "Tanks", "Hats", "Stickers", "Tote Bags"];
 
   function renderPlaceholder(kind) {
@@ -426,7 +430,7 @@
     storeNode.appendChild(grid);
     var msg = el("p", "shop-msg");
     if (kind === "error") {
-      msg.textContent = "The store didn\u2019t load. Give it a refresh. #thiswillneverwork";
+      msg.textContent = "The store didn’t load. Give it a refresh. #thiswillneverwork";
     } else {
       msg.appendChild(document.createTextNode("The shop is still being built out of scrap. Follow "));
       var a = el("a", null, "@dumpstertalk");
@@ -439,6 +443,7 @@
     storeNode.appendChild(msg);
   }
 
+  /* --- small helpers --- */
   function stateOf(thing) {
     var st = thing && thing.state;
     if (!st) return "";
@@ -447,30 +452,20 @@
 
   function money(price) {
     if (!price || typeof price.value !== "number") return "";
-    var cur = price.currency || "USD";
+    var cur = price.currency || CUR;
+    var n;
     try {
-      return new Intl.NumberFormat("en-CA", {
+      n = new Intl.NumberFormat("en-CA", {
         style: "currency", currency: cur, currencyDisplay: "narrowSymbol"
-      }).format(price.value) + " " + cur;
+      }).format(price.value);
     } catch (e) {
-      return "$" + price.value.toFixed(2) + " " + cur;
+      n = "$" + price.value.toFixed(2);
     }
-  }
-
-  function pickImage(variant, product) {
-    var list = (variant && variant.images && variant.images.length) ? variant.images : (product.images || []);
-    var im = list[0];
-    if (!im) return null;
-    return im.url || im.transformedUrl || null;
-  }
-
-  function checkoutUrl(variantId) {
-    var shop = String(cfg.shopDomain || "").replace(/^https?:\/\//, "").replace(/\/$/, "");
-    return "https://" + shop + "/cart/checkout?products=" + encodeURIComponent(variantId) + ":1";
+    return n + " " + cur;
   }
 
   function attr(variant, key) {
-    var a = variant.attributes || {};
+    var a = (variant && variant.attributes) || {};
     var v = a[key];
     if (!v) return "";
     return String(v.name || v.value || v);
@@ -482,21 +477,250 @@
     return out;
   }
 
-  function buildTile(product) {
+  function imagesOf(variant, product) {
+    var list = (variant && variant.images && variant.images.length)
+      ? variant.images : ((product && product.images) || []);
+    return list.map(function (im) { return im && (im.url || im.transformedUrl); })
+               .filter(Boolean);
+  }
+
+  function api(path, opts) {
+    var join = path.indexOf("?") === -1 ? "?" : "&";
+    var url = API + path + join + "storefront_token=" + encodeURIComponent(cfg.storefrontToken) +
+              "&currency=" + encodeURIComponent(CUR);
+    var o = opts || {};
+    o.headers = o.headers || {};
+    o.headers.Accept = "application/json";
+    if (o.body) o.headers["Content-Type"] = "application/json";
+    return fetch(url, o).then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    });
+  }
+
+  /* --- direct checkout link, used as the fallback if carts misbehave --- */
+  function directCheckout(variantId) {
+    return "https://" + SHOP + "/cart/checkout?products=" + encodeURIComponent(variantId) +
+           ":1&currency=" + encodeURIComponent(CUR);
+  }
+  function cartCheckout(cartId) {
+    return "https://" + SHOP + "/cart/checkout?cartId=" + encodeURIComponent(cartId) +
+           "&currency=" + encodeURIComponent(CUR);
+  }
+
+  /* ---------- the cart ---------- */
+  var cart = {
+    id: null,
+    data: null,
+    broken: false,   // if the cart API fails we quietly go back to one-click Buy
+    node: null,
+    listNode: null,
+    totalNode: null,
+    goNode: null,
+    countNode: null
+  };
+
+  function readCartId() {
+    try { return localStorage.getItem(CART_KEY) || null; } catch (e) { return null; }
+  }
+  function writeCartId(id) {
+    try { if (id) { localStorage.setItem(CART_KEY, id); } else { localStorage.removeItem(CART_KEY); } }
+    catch (e) { /* private window: cart just won't survive a reload */ }
+  }
+
+  function cartCount() {
+    if (!cart.data || !cart.data.items) return 0;
+    return cart.data.items.reduce(function (n, it) { return n + (it.quantity || 0); }, 0);
+  }
+
+  function cartTotal() {
+    if (!cart.data || !cart.data.items) return null;
+    var sum = 0, cur = CUR;
+    cart.data.items.forEach(function (it) {
+      var p = it.variant && it.variant.unitPrice;
+      if (p && typeof p.value === "number") { sum += p.value * (it.quantity || 0); cur = p.currency || cur; }
+    });
+    return { value: sum, currency: cur };
+  }
+
+  function buildCartPanel() {
+    var box = el("div", "cart");
+    box.hidden = true;
+
+    var head = el("div", "cart-head");
+    head.appendChild(el("h3", "cart-title", "In the bin"));
+    cart.countNode = el("span", "cart-count", "0");
+    head.appendChild(cart.countNode);
+    box.appendChild(head);
+
+    cart.listNode = el("ul", "cart-list");
+    box.appendChild(cart.listNode);
+
+    var foot = el("div", "cart-foot");
+    cart.totalNode = el("p", "cart-total", "");
+    foot.appendChild(cart.totalNode);
+    cart.goNode = el("a", "btn btn-yellow cart-go", "Checkout");
+    cart.goNode.target = "_blank";
+    cart.goNode.rel = "noopener";
+    foot.appendChild(cart.goNode);
+    box.appendChild(foot);
+
+    box.appendChild(el("p", "cart-note",
+      "Checkout opens in a new tab on Fourthwall, where Canadians can switch to Canadian dollars. Shipping and taxes are worked out there."));
+
+    cart.node = box;
+    return box;
+  }
+
+  function renderCart() {
+    if (!cart.node) return;
+    var items = (cart.data && cart.data.items) || [];
+    cart.node.hidden = items.length === 0;
+    if (!items.length) return;
+
+    cart.listNode.textContent = "";
+    items.forEach(function (it) {
+      var v = it.variant || {};
+      var li = el("li", "cart-item");
+
+      var ims = imagesOf(v, v.product);
+      if (ims[0]) {
+        var im = el("img", "cart-thumb");
+        im.src = ims[0];
+        im.alt = "";
+        im.loading = "lazy";
+        li.appendChild(im);
+      }
+
+      var text = el("div", "cart-text");
+      text.appendChild(el("p", "cart-item-name", (v.product && v.product.name) || v.name || "Item"));
+      var bits = [attr(v, "color"), attr(v, "size")].filter(Boolean).join(" · ");
+      if (bits) text.appendChild(el("p", "cart-item-opts", bits));
+      text.appendChild(el("p", "cart-item-price", money(v.unitPrice)));
+      li.appendChild(text);
+
+      var qty = el("div", "cart-qty");
+      var minus = el("button", "qty-btn", "−");
+      minus.type = "button";
+      minus.setAttribute("aria-label", "One fewer");
+      var num = el("span", "qty-num", String(it.quantity || 0));
+      var plus = el("button", "qty-btn", "+");
+      plus.type = "button";
+      plus.setAttribute("aria-label", "One more");
+      minus.addEventListener("click", function () {
+        if ((it.quantity || 0) <= 1) { cartRemove(v.id, it.quantity || 1); }
+        else { cartChange(v.id, it.quantity - 1); }
+      });
+      plus.addEventListener("click", function () { cartChange(v.id, (it.quantity || 0) + 1); });
+      qty.appendChild(minus); qty.appendChild(num); qty.appendChild(plus);
+      li.appendChild(qty);
+
+      var kill = el("button", "cart-kill", "×");
+      kill.type = "button";
+      kill.setAttribute("aria-label", "Take it out");
+      kill.addEventListener("click", function () { cartRemove(v.id, it.quantity || 1); });
+      li.appendChild(kill);
+
+      cart.listNode.appendChild(li);
+    });
+
+    var t = cartTotal();
+    cart.totalNode.textContent = t ? "Subtotal " + money(t) : "";
+    cart.countNode.textContent = String(cartCount());
+    cart.goNode.href = cartCheckout(cart.id);
+  }
+
+  function cartBusy(on) {
+    if (cart.node) cart.node.classList.toggle("is-busy", !!on);
+  }
+
+  function cartFailed() {
+    // Something is wrong with the cart API. Forget the cart and let every
+    // tile go back to being a plain one-click Buy link, so people can
+    // still buy things.
+    cart.broken = true;
+    cart.id = null;
+    cart.data = null;
+    writeCartId(null);
+    if (cart.node) cart.node.hidden = true;
+    tiles.forEach(function (t) { t.toDirect(); });
+  }
+
+  function cartAdd(variantId) {
+    cartBusy(true);
+    var req = cart.id
+      ? api("/carts/" + encodeURIComponent(cart.id) + "/add",
+            { method: "POST", body: JSON.stringify({ items: [{ variantId: variantId, quantity: 1 }] }) })
+      : api("/carts", { method: "POST", body: JSON.stringify({ items: [{ variantId: variantId, quantity: 1 }] }) });
+    return req
+      .then(function (c) {
+        cart.id = c.id; cart.data = c; writeCartId(c.id);
+        renderCart(); cartBusy(false);
+      })
+      .catch(function () {
+        cartBusy(false);
+        if (cart.id) {       // stale cart id? start clean and try once more
+          cart.id = null; writeCartId(null);
+          return api("/carts", { method: "POST", body: JSON.stringify({ items: [{ variantId: variantId, quantity: 1 }] }) })
+            .then(function (c) { cart.id = c.id; cart.data = c; writeCartId(c.id); renderCart(); })
+            .catch(cartFailed);
+        }
+        cartFailed();
+      });
+  }
+
+  function cartChange(variantId, quantity) {
+    if (!cart.id) return;
+    cartBusy(true);
+    api("/carts/" + encodeURIComponent(cart.id) + "/change",
+        { method: "POST", body: JSON.stringify({ items: [{ variantId: variantId, quantity: quantity }] }) })
+      .then(function (c) { cart.data = c; renderCart(); cartBusy(false); })
+      .catch(function () { cartBusy(false); cartFailed(); });
+  }
+
+  function cartRemove(variantId, quantity) {
+    if (!cart.id) return;
+    cartBusy(true);
+    api("/carts/" + encodeURIComponent(cart.id) + "/remove",
+        { method: "POST", body: JSON.stringify({ items: [{ variantId: variantId, quantity: quantity }] }) })
+      .then(function (c) { cart.data = c; renderCart(); cartBusy(false); })
+      .catch(function () { cartBusy(false); cartFailed(); });
+  }
+
+  function restoreCart() {
+    var id = readCartId();
+    if (!id) return Promise.resolve();
+    return api("/carts/" + encodeURIComponent(id))
+      .then(function (c) { cart.id = c.id; cart.data = c; renderCart(); })
+      .catch(function () { writeCartId(null); });   // gone or expired: quietly start fresh
+  }
+
+  /* ---------- product tiles ---------- */
+  var tiles = [];
+  var canHover = !(window.matchMedia && window.matchMedia("(hover: none)").matches);
+
+  function buildTile(product, allowBack) {
     var variants = (product.variants || []).filter(function (v) { return v && v.id; });
     var li = el("li", "prod");
     var soldOut = stateOf(product) === "SOLD_OUT" || !variants.length;
-
-    var figure = el("div", "prod-shot");
-    var img = el("img");
-    img.alt = product.name || "";
-    img.loading = "lazy";
     var first = variants[0];
-    var src = pickImage(first, product);
-    if (src) { img.src = src; } else { img.src = "assets/img/logo-line.png"; img.className = "prod-fallback"; }
-    figure.appendChild(img);
-    if (soldOut) figure.appendChild(el("span", "prod-flag", "Sold out"));
-    li.appendChild(figure);
+
+    var shot = el("div", "prod-shot");
+    var front = el("img", "shot-front");
+    front.alt = product.name || "";
+    front.loading = "lazy";
+    var back = el("img", "shot-back");
+    back.alt = "";
+    back.loading = "lazy";
+    back.setAttribute("aria-hidden", "true");
+    shot.appendChild(front);
+    shot.appendChild(back);
+    if (soldOut) shot.appendChild(el("span", "prod-flag", "Sold out"));
+    li.appendChild(shot);
+
+    if (!canHover) {
+      shot.addEventListener("click", function () { shot.classList.toggle("is-back"); });
+    }
 
     li.appendChild(el("h3", "prod-name", product.name || "Untitled"));
     var priceEl = el("p", "prod-price", money(first && first.unitPrice));
@@ -508,29 +732,55 @@
     function currentVariant() {
       var wantC = colourSel ? colourSel.value : "";
       var wantS = sizeSel ? sizeSel.value : "";
-      // exact match only - never guess, or the Buy button would send the
-      // wrong size to checkout when a colour/size combo does not exist
+      // exact match only - never guess, or the button would send the wrong
+      // size to checkout when a colour/size combo does not exist
       return variants.filter(function (v) {
         return (!wantC || attr(v, "color") === wantC) && (!wantS || attr(v, "size") === wantS);
       })[0] || null;
     }
 
+    function setShots(v) {
+      var ims = imagesOf(v, product);
+      if (ims[0] && front.getAttribute("src") !== ims[0]) front.src = ims[0];
+      if (!ims[0]) { front.src = "assets/img/logo-line.png"; front.className = "shot-front is-fallback"; }
+      var hasBack = allowBack && ims.length > 1;
+      shot.classList.toggle("has-back", !!hasBack);
+      shot.classList.remove("is-back");
+      if (hasBack) {
+        if (back.getAttribute("src") !== ims[1]) back.src = ims[1];
+      } else {
+        back.removeAttribute("src");
+      }
+    }
+
+    var btn = el("button", "btn btn-yellow prod-buy", "Add to cart");
+    btn.type = "button";
+    var link = el("a", "btn btn-yellow prod-buy", "Buy");   // fallback form
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.hidden = true;
+
+    var unavailable = false;
+
     function refresh() {
       var v = currentVariant();
+      setShots(v || first);
       if (!v) {
-        buy.removeAttribute("href");
-        buy.textContent = "Unavailable";
-        buy.className = "btn btn-yellow prod-buy is-off";
-        buy.setAttribute("aria-disabled", "true");
+        unavailable = true;
+        btn.textContent = "Unavailable";
+        btn.disabled = true;
+        link.removeAttribute("href");
+        link.textContent = "Unavailable";
+        link.className = "btn btn-yellow prod-buy is-off";
         return;
       }
-      var im = pickImage(v, product);
-      if (im && img.getAttribute("src") !== im) { img.src = im; img.className = ""; }
+      unavailable = false;
+      btn.disabled = false;
+      btn.textContent = "Add to cart";
       priceEl.textContent = money(v.unitPrice);
-      buy.href = checkoutUrl(v.id);
-      buy.textContent = "Buy";
-      buy.className = "btn btn-yellow prod-buy";
-      buy.removeAttribute("aria-disabled");
+      link.href = directCheckout(v.id);
+      link.textContent = "Buy";
+      link.className = "btn btn-yellow prod-buy";
     }
 
     function makeSelect(label, values, cls) {
@@ -552,12 +802,12 @@
       colourSel = c.sel;
       picks.appendChild(c.wrap);
     }
-    var sizesFor = function () {
+    function sizesFor() {
       var wantC = colourSel ? colourSel.value : "";
       return uniq(variants.filter(function (v) {
         return !wantC || attr(v, "color") === wantC;
       }).map(function (v) { return attr(v, "size"); }));
-    };
+    }
     var allSizes = sizesFor();
     if (allSizes.length > 1) {
       var sz = makeSelect("Size", allSizes, "is-size");
@@ -566,15 +816,29 @@
     }
     if (picks.childNodes.length) li.appendChild(picks);
 
-    var buy = el("a", "btn btn-yellow prod-buy", soldOut ? "Sold out" : "Buy");
     if (soldOut) {
-      buy.setAttribute("aria-disabled", "true");
-      buy.className += " is-off";
-    } else {
-      buy.href = checkoutUrl((first || {}).id);
-      buy.rel = "noopener";
+      btn.textContent = "Sold out";
+      btn.disabled = true;
+      btn.className = "btn btn-yellow prod-buy is-off";
     }
-    li.appendChild(buy);
+    li.appendChild(btn);
+    li.appendChild(link);
+
+    btn.addEventListener("click", function () {
+      var v = currentVariant();
+      if (!v || soldOut) return;
+      btn.disabled = true;
+      btn.textContent = "Adding…";
+      cartAdd(v.id).then(function () {
+        if (cart.broken) return;
+        btn.textContent = "Added ✓";
+        setTimeout(function () {
+          if (unavailable || soldOut) return;
+          btn.disabled = false;
+          btn.textContent = "Add to cart";
+        }, 1400);
+      });
+    });
 
     if (colourSel) {
       colourSel.addEventListener("change", function () {
@@ -592,20 +856,30 @@
       });
     }
     if (sizeSel) sizeSel.addEventListener("change", refresh);
-    if (!soldOut) refresh();
+
+    if (!soldOut) { refresh(); } else { setShots(first); }
+
+    tiles.push({
+      toDirect: function () {         // cart API died: show the plain Buy link
+        btn.hidden = true;
+        link.hidden = false;
+      }
+    });
     return li;
   }
 
   function renderProducts(list) {
     storeNode.textContent = "";
+    tiles = [];
     var grid = el("ul", "prod-grid");
-    list.forEach(function (p) { grid.appendChild(buildTile(p)); });
+    list.forEach(function (row) { grid.appendChild(buildTile(row.product, row.allowBack)); });
     storeNode.appendChild(grid);
+    storeNode.appendChild(buildCartPanel());
 
     var msg = el("p", "shop-msg");
-    msg.appendChild(document.createTextNode("Prices in US dollars. Canadian prices and shipping are shown at checkout. "));
+    msg.appendChild(document.createTextNode("Prices in US dollars. Canadian dollars and shipping are shown at checkout. "));
     var a = el("a", null, "See the whole shop");
-    a.href = "https://" + String(cfg.shopDomain || "").replace(/^https?:\/\//, "").replace(/\/$/, "");
+    a.href = "https://" + SHOP;
     a.target = "_blank";
     a.rel = "noopener";
     msg.appendChild(a);
@@ -613,18 +887,9 @@
     storeNode.appendChild(msg);
   }
 
-  function fetchJSON(path) {
-    var join = path.indexOf("?") === -1 ? "?" : "&";
-    return fetch(API + path + join + "storefront_token=" + encodeURIComponent(cfg.storefrontToken),
-                 { headers: { "Accept": "application/json" } })
-      .then(function (r) {
-        if (!r.ok) throw new Error("HTTP " + r.status);
-        return r.json();
-      });
-  }
-
+  /* ---------- loading ---------- */
   function productsIn(slug) {
-    return fetchJSON("/collections/" + encodeURIComponent(slug) + "/products?size=100")
+    return api("/collections/" + encodeURIComponent(slug) + "/products?size=100")
       .then(function (d) { return (d && d.results) || []; })
       .catch(function () { return []; });   // one bad collection must not kill the grid
   }
@@ -634,7 +899,6 @@
   // is one you curate by hand. So we read every collection and merge,
   // which means a product shows up as long as it is in at least one.
   function loadStore() {
-    var wanted = cfg.collection && cfg.collection !== "all" ? [cfg.collection] : null;
     // shop-front order: shirts first, odds and ends last
     var PREF = ["tees", "t-shirts", "shirts", "hoodies", "sweatshirts", "tanks", "hats", "stickers"];
     function rank(slug) {
@@ -643,38 +907,52 @@
       return slug === "all" ? 998 : 500;   // "all" last: it is the catch-all
     }
 
+    var wanted = cfg.collection && cfg.collection !== "all" ? [cfg.collection] : null;
     var step = wanted
       ? Promise.resolve(wanted)
-      : fetchJSON("/collections?size=100").then(function (d) {
+      : api("/collections?size=100").then(function (d) {
           var slugs = ((d && d.results) || []).map(function (c) { return c.slug; }).filter(Boolean);
           slugs.sort(function (a, b) { return rank(a) - rank(b); });
           return slugs.length ? slugs : ["all"];
         });
 
     step
-      .then(function (slugs) { return Promise.all(slugs.map(productsIn)); })
-      .then(function (lists) {
+      .then(function (slugs) {
+        return Promise.all(slugs.map(productsIn)).then(function (lists) {
+          return { slugs: slugs, lists: lists };
+        });
+      })
+      .then(function (got) {
+        // Which products live in a collection where the second photo is not
+        // a back view (hats are shot from several angles, so no hover swap).
+        var backBlocked = {};
+        got.slugs.forEach(function (slug, i) {
+          if (noBack.indexOf(String(slug).toLowerCase()) === -1) return;
+          got.lists[i].forEach(function (p) { if (p && p.id) backBlocked[p.id] = 1; });
+        });
+
         var seen = {}, list = [];
-        lists.forEach(function (one) {
+        got.lists.forEach(function (one) {
           one.forEach(function (p) {
             if (!p || !p.id || seen[p.id]) return;
             if (!(p.variants || []).length) return;
             seen[p.id] = 1;
-            list.push(p);
+            list.push({ product: p, allowBack: !backBlocked[p.id] });
           });
         });
         list.sort(function (a, b) {
-          return (stateOf(a) === "SOLD_OUT" ? 1 : 0) - (stateOf(b) === "SOLD_OUT" ? 1 : 0);
+          return (stateOf(a.product) === "SOLD_OUT" ? 1 : 0) - (stateOf(b.product) === "SOLD_OUT" ? 1 : 0);
         });
         if (!list.length) { renderPlaceholder(); return; }
         renderProducts(list);
+        restoreCart();
       })
       .catch(function () { renderPlaceholder("error"); });
   }
 
   if (storeNode) {
     if (cfg.storefrontToken && cfg.shopDomain) {
-      storeNode.appendChild(el("p", "shop-msg", "Dragging the merch out of the bin\u2026"));
+      storeNode.appendChild(el("p", "shop-msg", "Dragging the merch out of the bin…"));
       loadStore();
     } else {
       renderPlaceholder();
