@@ -403,15 +403,16 @@
     }
   }
 
-  /* ---------- Merch store ---------- */
+  /* ---------- Merch store (Fourthwall Storefront API) ---------- */
   var storeNode = document.getElementById("merch-store");
   var cfg = window.DT_STORE || {};
-  var products = ["T-Shirts", "Hoodies", "Stickers", "Mugs", "Hats", "Tote Bags"];
+  var API = "https://storefront-api.fourthwall.com/v1";
+  var placeholderNames = ["T-Shirts", "Hoodies", "Tanks", "Hats", "Stickers", "Tote Bags"];
 
   function renderPlaceholder(kind) {
     storeNode.textContent = "";
     var grid = el("ul", "shop-grid");
-    products.forEach(function (name) {
+    placeholderNames.forEach(function (name) {
       var li = el("li", "shop-tile");
       var img = el("img");
       img.src = "assets/img/logo-line.png";
@@ -425,7 +426,7 @@
     storeNode.appendChild(grid);
     var msg = el("p", "shop-msg");
     if (kind === "error") {
-      msg.textContent = "The store didn’t load. Give it a refresh. #thiswillneverwork";
+      msg.textContent = "The store didn\u2019t load. Give it a refresh. #thiswillneverwork";
     } else {
       msg.appendChild(document.createTextNode("The shop is still being built out of scrap. Follow "));
       var a = el("a", null, "@dumpstertalk");
@@ -438,83 +439,242 @@
     storeNode.appendChild(msg);
   }
 
-  function loadStore() {
-    var s = document.createElement("script");
-    s.async = true;
-    s.src = "https://sdks.shopifycdn.com/buy-button/latest/buy-button-storefront.min.js";
-    s.onerror = function () { renderPlaceholder("error"); };
-    s.onload = function () {
-      try {
-        var clientOpts = { domain: cfg.domain };
-        if (cfg.storefrontAccessToken) {
-          clientOpts.storefrontAccessToken = cfg.storefrontAccessToken;
-        } else {
-          // Older-style embed codes use apiKey + appId instead
-          clientOpts.apiKey = cfg.apiKey;
-          clientOpts.appId = cfg.appId || "6";
+  function stateOf(thing) {
+    var st = thing && thing.state;
+    if (!st) return "";
+    return String(st.type || st.state || st).toUpperCase();
+  }
+
+  function money(price) {
+    if (!price || typeof price.value !== "number") return "";
+    var cur = price.currency || "USD";
+    try {
+      return new Intl.NumberFormat("en-CA", {
+        style: "currency", currency: cur, currencyDisplay: "narrowSymbol"
+      }).format(price.value) + " " + cur;
+    } catch (e) {
+      return "$" + price.value.toFixed(2) + " " + cur;
+    }
+  }
+
+  function pickImage(variant, product) {
+    var list = (variant && variant.images && variant.images.length) ? variant.images : (product.images || []);
+    var im = list[0];
+    if (!im) return null;
+    return im.url || im.transformedUrl || null;
+  }
+
+  function checkoutUrl(variantId) {
+    var shop = String(cfg.shopDomain || "").replace(/^https?:\/\//, "").replace(/\/$/, "");
+    return "https://" + shop + "/cart/checkout?products=" + encodeURIComponent(variantId) + ":1";
+  }
+
+  function attr(variant, key) {
+    var a = variant.attributes || {};
+    var v = a[key];
+    if (!v) return "";
+    return String(v.name || v.value || v);
+  }
+
+  function uniq(list) {
+    var seen = {}, out = [];
+    list.forEach(function (v) { if (v && !seen[v]) { seen[v] = 1; out.push(v); } });
+    return out;
+  }
+
+  function buildTile(product) {
+    var variants = (product.variants || []).filter(function (v) { return v && v.id; });
+    var li = el("li", "prod");
+    var soldOut = stateOf(product) === "SOLD_OUT" || !variants.length;
+
+    var figure = el("div", "prod-shot");
+    var img = el("img");
+    img.alt = product.name || "";
+    img.loading = "lazy";
+    var first = variants[0];
+    var src = pickImage(first, product);
+    if (src) { img.src = src; } else { img.src = "assets/img/logo-line.png"; img.className = "prod-fallback"; }
+    figure.appendChild(img);
+    if (soldOut) figure.appendChild(el("span", "prod-flag", "Sold out"));
+    li.appendChild(figure);
+
+    li.appendChild(el("h3", "prod-name", product.name || "Untitled"));
+    var priceEl = el("p", "prod-price", money(first && first.unitPrice));
+    li.appendChild(priceEl);
+
+    var colours = uniq(variants.map(function (v) { return attr(v, "color"); }));
+    var colourSel = null, sizeSel = null;
+
+    function currentVariant() {
+      var wantC = colourSel ? colourSel.value : "";
+      var wantS = sizeSel ? sizeSel.value : "";
+      // exact match only - never guess, or the Buy button would send the
+      // wrong size to checkout when a colour/size combo does not exist
+      return variants.filter(function (v) {
+        return (!wantC || attr(v, "color") === wantC) && (!wantS || attr(v, "size") === wantS);
+      })[0] || null;
+    }
+
+    function refresh() {
+      var v = currentVariant();
+      if (!v) {
+        buy.removeAttribute("href");
+        buy.textContent = "Unavailable";
+        buy.className = "btn btn-yellow prod-buy is-off";
+        buy.setAttribute("aria-disabled", "true");
+        return;
+      }
+      var im = pickImage(v, product);
+      if (im && img.getAttribute("src") !== im) { img.src = im; img.className = ""; }
+      priceEl.textContent = money(v.unitPrice);
+      buy.href = checkoutUrl(v.id);
+      buy.textContent = "Buy";
+      buy.className = "btn btn-yellow prod-buy";
+      buy.removeAttribute("aria-disabled");
+    }
+
+    function makeSelect(label, values, cls) {
+      var wrap = el("label", "prod-pick " + cls);
+      wrap.appendChild(el("span", "prod-pick-label", label));
+      var sel = document.createElement("select");
+      values.forEach(function (val) {
+        var o = document.createElement("option");
+        o.value = val; o.textContent = val;
+        sel.appendChild(o);
+      });
+      wrap.appendChild(sel);
+      return { wrap: wrap, sel: sel };
+    }
+
+    var picks = el("div", "prod-picks");
+    if (colours.length > 1) {
+      var c = makeSelect("Colour", colours, "is-colour");
+      colourSel = c.sel;
+      picks.appendChild(c.wrap);
+    }
+    var sizesFor = function () {
+      var wantC = colourSel ? colourSel.value : "";
+      return uniq(variants.filter(function (v) {
+        return !wantC || attr(v, "color") === wantC;
+      }).map(function (v) { return attr(v, "size"); }));
+    };
+    var allSizes = sizesFor();
+    if (allSizes.length > 1) {
+      var sz = makeSelect("Size", allSizes, "is-size");
+      sizeSel = sz.sel;
+      picks.appendChild(sz.wrap);
+    }
+    if (picks.childNodes.length) li.appendChild(picks);
+
+    var buy = el("a", "btn btn-yellow prod-buy", soldOut ? "Sold out" : "Buy");
+    if (soldOut) {
+      buy.setAttribute("aria-disabled", "true");
+      buy.className += " is-off";
+    } else {
+      buy.href = checkoutUrl((first || {}).id);
+      buy.rel = "noopener";
+    }
+    li.appendChild(buy);
+
+    if (colourSel) {
+      colourSel.addEventListener("change", function () {
+        if (sizeSel) {
+          var keep = sizeSel.value;
+          sizeSel.textContent = "";
+          sizesFor().forEach(function (val) {
+            var o = document.createElement("option");
+            o.value = val; o.textContent = val;
+            if (val === keep) o.selected = true;
+            sizeSel.appendChild(o);
+          });
         }
-        var client = window.ShopifyBuy.buildClient(clientOpts);
-        window.ShopifyBuy.UI.onReady(client).then(function (ui) {
-          storeNode.textContent = "";
-          var yellow = "#ffcc0b", ink = "#16140f", white = "#ffffff";
-          var head = "'Barlow Condensed', 'Arial Narrow', Arial, sans-serif";
-          var btn = {
-            "font-family": head,
-            "font-weight": "700",
-            "text-transform": "uppercase",
-            "letter-spacing": ".05em",
-            "font-size": "18px",
-            "background-color": yellow,
-            "color": ink,
-            "border-radius": "0",
-            "border": "3px solid " + yellow,
-            ":hover": { "background-color": white, "color": ink, "border-color": white },
-            ":focus": { "background-color": white, "color": ink, "border-color": white }
-          };
-          ui.createComponent(cfg.componentType === "product" ? "product" : "collection", {
-            id: cfg.collectionId,
-            node: storeNode,
-            moneyFormat: cfg.moneyFormat || "%24%7B%7Bamount%7D%7D",
-            options: {
-              product: {
-                styles: {
-                  product: { "@media (min-width: 601px)": { "max-width": "calc(33.333% - 20px)", "margin-left": "20px", "margin-bottom": "40px" } },
-                  title: { "font-family": head, "text-transform": "uppercase", "color": white, "font-size": "26px", "font-weight": "700" },
-                  price: { "font-family": head, "font-size": "22px", "color": yellow },
-                  compareAt: { "color": "#b9b4a6" },
-                  button: btn
-                },
-                text: { button: "Add to cart" }
-              },
-              productSet: { styles: { products: { "@media (min-width: 601px)": { "margin-left": "-20px" } } } },
-              modalProduct: {
-                styles: {
-                  button: btn,
-                  title: { "font-family": head, "text-transform": "uppercase", "font-weight": "700" }
-                }
-              },
-              cart: {
-                styles: {
-                  button: btn,
-                  title: { "font-family": head, "text-transform": "uppercase", "font-weight": "700" }
-                },
-                text: { total: "Subtotal", button: "Checkout" }
-              },
-              toggle: { styles: { toggle: { "background-color": yellow, "color": ink, ":hover": { "background-color": white } } } }
-            }
+        refresh();
+      });
+    }
+    if (sizeSel) sizeSel.addEventListener("change", refresh);
+    if (!soldOut) refresh();
+    return li;
+  }
+
+  function renderProducts(list) {
+    storeNode.textContent = "";
+    var grid = el("ul", "prod-grid");
+    list.forEach(function (p) { grid.appendChild(buildTile(p)); });
+    storeNode.appendChild(grid);
+
+    var msg = el("p", "shop-msg");
+    msg.appendChild(document.createTextNode("Prices in US dollars. Canadian prices and shipping are shown at checkout. "));
+    var a = el("a", null, "See the whole shop");
+    a.href = "https://" + String(cfg.shopDomain || "").replace(/^https?:\/\//, "").replace(/\/$/, "");
+    a.target = "_blank";
+    a.rel = "noopener";
+    msg.appendChild(a);
+    msg.appendChild(document.createTextNode("."));
+    storeNode.appendChild(msg);
+  }
+
+  function fetchJSON(path) {
+    var join = path.indexOf("?") === -1 ? "?" : "&";
+    return fetch(API + path + join + "storefront_token=" + encodeURIComponent(cfg.storefrontToken),
+                 { headers: { "Accept": "application/json" } })
+      .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      });
+  }
+
+  function productsIn(slug) {
+    return fetchJSON("/collections/" + encodeURIComponent(slug) + "/products?size=100")
+      .then(function (d) { return (d && d.results) || []; })
+      .catch(function () { return []; });   // one bad collection must not kill the grid
+  }
+
+  // Fourthwall has no "list every product" endpoint: products are only
+  // reachable through collections, and even the built-in "all" collection
+  // is one you curate by hand. So we read every collection and merge,
+  // which means a product shows up as long as it is in at least one.
+  function loadStore() {
+    var wanted = cfg.collection && cfg.collection !== "all" ? [cfg.collection] : null;
+    // shop-front order: shirts first, odds and ends last
+    var PREF = ["tees", "t-shirts", "shirts", "hoodies", "sweatshirts", "tanks", "hats", "stickers"];
+    function rank(slug) {
+      var i = PREF.indexOf(String(slug).toLowerCase());
+      if (i !== -1) return i;
+      return slug === "all" ? 998 : 500;   // "all" last: it is the catch-all
+    }
+
+    var step = wanted
+      ? Promise.resolve(wanted)
+      : fetchJSON("/collections?size=100").then(function (d) {
+          var slugs = ((d && d.results) || []).map(function (c) { return c.slug; }).filter(Boolean);
+          slugs.sort(function (a, b) { return rank(a) - rank(b); });
+          return slugs.length ? slugs : ["all"];
+        });
+
+    step
+      .then(function (slugs) { return Promise.all(slugs.map(productsIn)); })
+      .then(function (lists) {
+        var seen = {}, list = [];
+        lists.forEach(function (one) {
+          one.forEach(function (p) {
+            if (!p || !p.id || seen[p.id]) return;
+            if (!(p.variants || []).length) return;
+            seen[p.id] = 1;
+            list.push(p);
           });
         });
-      } catch (e) {
-        renderPlaceholder("error");
-      }
-    };
-    document.head.appendChild(s);
+        list.sort(function (a, b) {
+          return (stateOf(a) === "SOLD_OUT" ? 1 : 0) - (stateOf(b) === "SOLD_OUT" ? 1 : 0);
+        });
+        if (!list.length) { renderPlaceholder(); return; }
+        renderProducts(list);
+      })
+      .catch(function () { renderPlaceholder("error"); });
   }
 
   if (storeNode) {
-    var configured = cfg.domain && (cfg.storefrontAccessToken || cfg.apiKey) && cfg.collectionId;
-    if (configured) {
-      storeNode.textContent = "Dragging the merch out of the bin…";
+    if (cfg.storefrontToken && cfg.shopDomain) {
+      storeNode.appendChild(el("p", "shop-msg", "Dragging the merch out of the bin\u2026"));
       loadStore();
     } else {
       renderPlaceholder();

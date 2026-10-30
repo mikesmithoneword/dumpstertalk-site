@@ -1,30 +1,25 @@
 /* ==========================================================
-   MERCH STORE SETTINGS  (Shopify Buy Button + Printful)
+   MERCH STORE SETTINGS  (Fourthwall Storefront API)
 
-   Until you fill these in, the site shows a "drop incoming" preview grid.
-   Once you do, the live store appears in the Merch section automatically.
+   These two values are all the site needs. Both are safe to have
+   in public code: the storefront token is read-only and can only
+   see products you have published.
 
-   Where to find each value: see START-HERE.md, Part 3 (the merch store).
+   If both are blank, the Merch section falls back to the
+   "Drop incoming" placeholder tiles.
+
+   Where to find them:
+     storefrontToken - Fourthwall dashboard, Settings > For developers
+                       > Storefront API > Create token
+     shopDomain      - your shop address, without https://
    ========================================================== */
 window.DT_STORE = {
-  // e.g. "dumpster-talk.myshopify.com"
-  domain: "",
+  storefrontToken: "ptkn_5609a703-9f8f-4daa-bbbe-18befc16348b",
 
-  // Storefront access token from the Shopify "Buy Button" embed code.
-  // (If your embed code shows "apiKey" and "appId" instead, fill in
-  //  apiKey / appId below and leave this one empty.)
-  storefrontAccessToken: "",
-  apiKey: "",
-  appId: "",
+  shopDomain: "dumpster-talk-shop.fourthwall.com",
 
-  // The numeric ID of the collection (or product) you want to show
-  collectionId: "",
-
-  // "collection" shows a grid of everything in that collection.
-  // Use "product" if collectionId is really a single product ID.
-  componentType: "collection",
-
-  // How prices are displayed. This one shows "$25.00 CAD".
-  // Encoded form of  ${{amount}} CAD   (change CAD to USD if you price in USD)
-  moneyFormat: "%24%7B%7Bamount%7D%7D%20CAD"
+  // Which Fourthwall collection to show.
+  // "all" = every published product, newest first.
+  // Change this to a collection slug (e.g. "tees") to show only that one.
+  collection: "all"
 };
