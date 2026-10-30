@@ -304,6 +304,13 @@ strong { font-weight: 600; }
 button.prod-buy { font: inherit; cursor: pointer; }
 .prod-buy.is-off, .prod-buy:disabled { background: #3a362c; border-color: #3a362c; color: var(--dim); cursor: not-allowed; }
 
+/* ---- currency switch ---- */
+.cur-switch { display: flex; align-items: center; gap: 8px; margin: 0 0 20px; }
+.cur-label { font: 700 12px/1 var(--head); letter-spacing: .12em; text-transform: uppercase; color: var(--dim); margin-right: 2px; }
+.cur-opt { font: 700 14px/1 var(--head); letter-spacing: .08em; text-transform: uppercase; color: var(--paper); background: none; border: 2px solid #3a362c; padding: 8px 12px 7px; cursor: pointer; }
+.cur-opt:hover { border-color: var(--yellow); }
+.cur-opt.is-on { background: var(--yellow); border-color: var(--yellow); color: var(--ink); }
+
 /* ---- the cart ---- */
 .cart { margin: 34px 0 0; border: 3px solid var(--yellow); background: #211e17; padding: 18px 20px 20px; }
 .cart.is-busy { opacity: .55; pointer-events: none; }

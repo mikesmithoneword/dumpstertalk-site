@@ -407,7 +407,13 @@
   var storeNode = document.getElementById("merch-store");
   var cfg = window.DT_STORE || {};
   var API = "https://storefront-api.fourthwall.com/v1";
+  var CUR_KEY = "dt_currency_v1";
+  var CURRENCIES = ["USD", "CAD"];
   var CUR = (cfg.currency || "USD").toUpperCase();
+  try {
+    var saved = localStorage.getItem(CUR_KEY);
+    if (saved && CURRENCIES.indexOf(saved) !== -1) CUR = saved;
+  } catch (e) { /* private window: just use the default */ }
   var CART_KEY = "dt_cart_id_v1";
   var SHOP = String(cfg.shopDomain || "").replace(/^https?:\/\//, "").replace(/\/$/, "");
   var noBack = (cfg.noBackImage || ["hats"]).map(function (x) { return String(x).toLowerCase(); });
@@ -505,10 +511,10 @@
 
   /* --- direct checkout link, used as the fallback if carts misbehave --- */
   function curParam() {
-    // cfg.checkoutCurrency: "" or null = let Fourthwall choose by location,
-    // which is what lets a Canadian see CAD without backing out first.
-    var c = cfg.checkoutCurrency;
-    return c ? "&currency=" + encodeURIComponent(String(c).toUpperCase()) : "";
+    // A cart is always created in USD, Fourthwall's base currency, and the
+    // checkout inherits that unless we say otherwise. So always pass the
+    // currency the visitor is actually looking at.
+    return "&currency=" + encodeURIComponent(CUR);
   }
   function directCheckout(variantId) {
     return "https://" + SHOP + "/cart/checkout?products=" + encodeURIComponent(variantId) + ":1" + curParam();
@@ -595,7 +601,7 @@
     box.appendChild(foot);
 
     box.appendChild(el("p", "cart-note",
-      "Checkout opens in a new tab on Fourthwall, where Canadians can switch to Canadian dollars. Shipping and taxes are worked out there."));
+      "Checkout opens in a new tab on Fourthwall, in " + CUR + ". Shipping and taxes are worked out there."));
 
     cart.node = box;
     return box;
@@ -744,7 +750,7 @@
   }
 
   function restoreCart() {
-    var id = readCartId();
+    var id = cart.id || readCartId();
     if (!id) return Promise.resolve();
     return api("/carts/" + encodeURIComponent(id))
       .then(function (c) { cart.id = c.id; cart.data = c; renderCart(); })
@@ -959,16 +965,43 @@
     return li;
   }
 
+  function buildCurrencySwitch() {
+    var wrap = el("div", "cur-switch");
+    wrap.setAttribute("role", "group");
+    wrap.setAttribute("aria-label", "Currency");
+    wrap.appendChild(el("span", "cur-label", "Prices in"));
+    CURRENCIES.forEach(function (code) {
+      var b = el("button", "cur-opt" + (code === CUR ? " is-on" : ""), code);
+      b.type = "button";
+      b.setAttribute("aria-pressed", code === CUR ? "true" : "false");
+      b.addEventListener("click", function () { switchCurrency(code); });
+      wrap.appendChild(b);
+    });
+    return wrap;
+  }
+
+  function switchCurrency(code) {
+    if (code === CUR) return;
+    CUR = code;
+    try { localStorage.setItem(CUR_KEY, code); } catch (e) { /* fine */ }
+    storeNode.textContent = "";
+    storeNode.appendChild(el("p", "shop-msg", "Changing the price tags\u2026"));
+    loadStore();
+  }
+
   function renderProducts(list) {
     storeNode.textContent = "";
     tiles = [];
+    storeNode.appendChild(buildCurrencySwitch());
     var grid = el("ul", "prod-grid");
     list.forEach(function (row) { grid.appendChild(buildTile(row.product, row.allowBack)); });
     storeNode.appendChild(grid);
     storeNode.appendChild(buildCartPanel());
 
     var msg = el("p", "shop-msg");
-    msg.appendChild(document.createTextNode("Prices in US dollars. Canadian dollars and shipping are shown at checkout. "));
+    msg.appendChild(document.createTextNode(CUR === "CAD"
+      ? "Prices in Canadian dollars, converted by Fourthwall. Shipping is worked out at checkout. "
+      : "Prices in US dollars. Switch to CAD above if you are in Canada. Shipping is worked out at checkout. "));
     var a = el("a", null, "See the whole shop");
     a.href = "https://" + SHOP;
     a.target = "_blank";
